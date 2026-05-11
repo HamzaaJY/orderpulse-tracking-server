@@ -5,7 +5,16 @@ const { getExecution, getAllExecutions, getActiveOrders } = require('../services
 
 // POST /orders — submit order via REST (not WebSocket)
 router.post('/', async (req, res) => {
-  const result = await submitOrder(req.body, req.app.get('io'));
+
+  console.log('--- [ROUTER DEBUG] New Order Request ---');
+  console.log('Headers:', JSON.stringify(req.headers, null, 2));
+  const userId = req.headers['x-user-id'];
+  const correlationId = req.headers['x-correlation-id'];
+  console.log(userId)
+  console.log(correlationId)
+  const result = await submitOrder(req.body, req.app.get('io'),{
+    userId, correlationId
+  });
   res.status(result.success ? 202 : 400).json(result);
 });
 

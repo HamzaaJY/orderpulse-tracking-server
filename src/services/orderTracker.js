@@ -3,13 +3,15 @@ const { v4: uuidv4 } = require('uuid');
 const config = require('../../config/default');
 const executionLogger = require('./executionLogger');
 
-const submitOrder = async (orderData, io) => {
-  const correlationId = `TRACK-${uuidv4().substring(0, 8).toUpperCase()}`;
+const submitOrder = async (orderData, io, context = {}) => {
+  const correlationId = context.correlationId || `TRACK-${uuidv4().substring(0, 8).toUpperCase()}`;
+  const userId = context.userId || 'anonymous';
+  
   let orderId = null;
 
-  const emit = (event, data) => {
-    if (io) io.emit(event, data);
-  };
+const emit = (event, data) => {
+  if (io) io.to(userId).emit(event, data);
+};
 
   try {
     // Stage 1 — Order Received
@@ -114,7 +116,9 @@ const submitOrder = async (orderData, io) => {
       {
         headers: {
           'Content-Type': 'application/json',
-          'x-correlation-id': correlationId
+          'x-correlation-id': correlationId,
+          'x-user-id': userId
+          
         },
         timeout: 30000
       }
@@ -216,7 +220,7 @@ const submitOrder = async (orderData, io) => {
     try {
       const erpResponse = await axios.get(
         `${config.services.erp}/api/inventory/check/${orderData.sku}`,
-        { headers: { 'x-correlation-id': correlationId } }
+        { headers: { 'x-correlation-id': correlationId, 'x-user-id': context.userId } }
       );
 
       emit('execution:log', {
@@ -345,7 +349,7 @@ const submitOrder = async (orderData, io) => {
     try {
       const crmResponse = await axios.get(
         `${config.services.crm}/api/customers/${orderData.customerId}`,
-        { headers: { 'x-correlation-id': correlationId } }
+        { headers: { 'x-correlation-id': correlationId, 'x-user-id': context.userId } }
       );
 
       emit('execution:log', {
@@ -394,7 +398,7 @@ const submitOrder = async (orderData, io) => {
     try {
       const warehouseResponse = await axios.get(
         `${config.services.warehouse}/api/warehouse/status/${orderId}`,
-        { headers: { 'x-correlation-id': correlationId } }
+        { headers: { 'x-correlation-id': correlationId, 'x-user-id': context.userId } }
       );
 
       const ticket = warehouseResponse.data.data;

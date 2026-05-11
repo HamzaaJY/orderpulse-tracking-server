@@ -47,25 +47,53 @@ app.use('/simulation', simulationRouter);
 
 // RabbitMQ Proxy Bridge (Fixes CORS for the DLQ Check)
 app.get('/api/rabbit-status', async (req, res) => {
+  const userId = req.headers['x-user-id']; // The frontend must send this!
+
+  if (!userId) {
+    return res.status(400).json({ error: "Missing x-user-id header" });
+  }
+
   try {
-    // We use fetch to talk to RabbitMQ on port 15672
-    const r = await fetch('http://localhost:15672/api/queues/%2F/orderpulse.dead.letter', {
+    // We use the "get" endpoint of the RabbitMQ API to peek at messages
+    const response = await fetch('http://localhost:15672/api/queues/%2F/orderpulse.dead.letter/get', {
+      method: 'POST',
       headers: {
-        'Authorization': 'Basic ' + Buffer.from('orderpulse:orderpulse123').toString('base64')
+        'Authorization': 'Basic ' + Buffer.from('orderpulse:orderpulse123').toString('base64'),
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        count: 50,      // Look at the last 50 failed messages
+        ackmode: 'ack_requeue_true', // CRITICAL: Peeks without deleting the message
+        encoding: 'auto',
+        truncate: 50000
+      })
+    });
+
+    if (!response.ok) throw new Error('RabbitMQ Management API unreachable');
+    
+    const messages = await response.json();
+
+    // Filter messages that belong to THIS user
+    const userDeadLetters = messages.filter(msg => {
+      // RabbitMQ messages store the original body as a string in 'payload'
+      try {
+        const body = JSON.parse(msg.payload);
+        return body.userId === userId;
+      } catch (e) {
+        return false;
       }
     });
-    
-    if (!r.ok) throw new Error('RabbitMQ unreachable');
-    
-    const data = await r.json();
-    // Return just the count to the UI
-    res.json({ messages: data.messages_ready || 0 });
+
+    res.json({ 
+      messages: userDeadLetters.length,
+      totalInQueue: messages.length // Optional: for debugging
+    });
+
   } catch (error) {
-    console.error('[PROXY ERROR]', error.message);
-    res.status(500).json({ error: "Cannot reach RabbitMQ" });
+    console.error('[DLQ PROXY ERROR]', error.message);
+    res.status(500).json({ error: "Cannot filter DLQ" });
   }
 });
-
 // 404 handler
 app.use((req, res) => {
   res.status(404).json({ error: `Route ${req.method} ${req.path} not found` });
@@ -81,7 +109,10 @@ app.use((err, req, res, next) => {
 setupSocketHandlers(io);
 
 // Start metrics polling
-startPolling(io);
+process.on('SIGTERM', () => {
+  stopAllPolling();
+  server.close();
+});
 
 // Start server
 server.listen(config.port, () => {

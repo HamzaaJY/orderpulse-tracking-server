@@ -2,7 +2,6 @@ const { submitOrder } = require('../services/orderTracker');
 const { runSimulation } = require('../services/simulationController');
 const { getExecution, getAllExecutions, getActiveOrders } = require('../services/executionLogger');
 const { getLastMetrics } = require('../services/metricsPoller');
-const { startUserPolling, stopUserPolling } = require('../services/metricsPoller');
 
 const setupSocketHandlers = (io) => {
 
@@ -10,26 +9,15 @@ const setupSocketHandlers = (io) => {
     console.log(`[WEBSOCKET] Client connected | id: ${socket.id}`);
 
     // Send current metrics immediately on connect
-   socket.on('join', (userId) => {
-      if (!userId) return;
+    const metrics = getLastMetrics();
+    if (metrics) socket.emit('metrics:update', metrics);
 
-      // Join the user's private Socket.IO room
-      socket.join(userId);
-      socket.userId = userId; // Store on socket for disconnect cleanup
-      console.log(`[WEBSOCKET] Socket ${socket.id} joined room: ${userId}`);
+    // Send active orders on connect
+    const activeOrders = getActiveOrders();
+    if (activeOrders.length > 0) {
+      socket.emit('orders:active', activeOrders);
+    }
 
-      // Start per-user metrics polling
-      startUserPolling(io, userId);
-
-      // Send active orders specific to this session/context if available
-      const activeOrders = getActiveOrders();
-      if (activeOrders.length > 0) {
-        socket.emit('orders:active', activeOrders);
-      }
-
-      // Confirm to client they are joined
-      socket.emit('joined', { userId, socketId: socket.id });
-    });
     // Client submits an order through the tracking server
     socket.on('order:submit', async (orderData) => {
       console.log(`[WEBSOCKET] Order submit request | customer: ${orderData.customerId}`);
