@@ -45,37 +45,48 @@ app.use('/orders', ordersRouter);
 app.use('/metrics', metricsRouter);
 app.use('/simulation', simulationRouter);
 
-// RabbitMQ Proxy Bridge (Fixes CORS for the DLQ Check)
+// RabbitMQ Proxy Bridge (CloudAMQP Production Version)
 app.get('/api/rabbit-status', async (req, res) => {
-  const userId = req.headers['x-user-id']; // The frontend must send this!
+  const userId = req.headers['x-user-id'];
 
   if (!userId) {
     return res.status(400).json({ error: "Missing x-user-id header" });
   }
 
+  // Configuration from Env (falling back to your details for now)
+  const RMQ_HOST = process.env.RABBITMQ_MGMT_HOST || 'campbell.lmq.cloudamqp.com';
+  const RMQ_USER = process.env.RABBITMQ_USERNAME || 'xoijhjjd';
+  const RMQ_PASS = process.env.RABBITMQ_PASSWORD || 'mxp1wJ1VKH43lutUELthuZhNVcISIY4w';
+  const RMQ_VHOST = process.env.RABBITMQ_VHOST || 'xoijhjjd';
+
+  // CloudAMQP uses the same host for Mgmt but via HTTPS on port 443 (or standard 15672)
+  // The %2F in your local code must be replaced with your specific VHost
+  const mgmtUrl = `https://${RMQ_HOST}/api/queues/${RMQ_VHOST}/orderpulse.dead.letter/get`;
+
   try {
-    // We use the "get" endpoint of the RabbitMQ API to peek at messages
-    const response = await fetch('http://localhost:15672/api/queues/%2F/orderpulse.dead.letter/get', {
+    const response = await fetch(mgmtUrl, {
       method: 'POST',
       headers: {
-        'Authorization': 'Basic ' + Buffer.from('orderpulse:orderpulse123').toString('base64'),
+        'Authorization': 'Basic ' + Buffer.from(`${RMQ_USER}:${RMQ_PASS}`).toString('base64'),
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        count: 50,      // Look at the last 50 failed messages
-        ackmode: 'ack_requeue_true', // CRITICAL: Peeks without deleting the message
+        count: 50,
+        ackmode: 'ack_requeue_true', // Peeks without deleting
         encoding: 'auto',
         truncate: 50000
       })
     });
 
-    if (!response.ok) throw new Error('RabbitMQ Management API unreachable');
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`RabbitMQ API Error: ${response.status} - ${errorText}`);
+    }
     
     const messages = await response.json();
 
     // Filter messages that belong to THIS user
     const userDeadLetters = messages.filter(msg => {
-      // RabbitMQ messages store the original body as a string in 'payload'
       try {
         const body = JSON.parse(msg.payload);
         return body.userId === userId;
@@ -86,12 +97,12 @@ app.get('/api/rabbit-status', async (req, res) => {
 
     res.json({ 
       messages: userDeadLetters.length,
-      totalInQueue: messages.length // Optional: for debugging
+      totalInQueue: messages.length 
     });
 
   } catch (error) {
     console.error('[DLQ PROXY ERROR]', error.message);
-    res.status(500).json({ error: "Cannot filter DLQ" });
+    res.status(500).json({ error: "Cannot filter CloudAMQP DLQ" });
   }
 });
 // 404 handler
